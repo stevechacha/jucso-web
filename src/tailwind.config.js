@@ -13,7 +13,7 @@ export default {
         },
       },
       fontFamily: {
-        display: ["Plus Jakarta Sans", "Inter", "system-ui", "sans-serif"],
+        display: ["Syne", "Inter", "system-ui", "sans-serif"],
         sans: ["Inter", "system-ui", "sans-serif"],
       },
       boxShadow: {
