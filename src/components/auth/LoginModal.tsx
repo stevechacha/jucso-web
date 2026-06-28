@@ -2,25 +2,31 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, isApiEnabled } from "@/api/client";
 import { jucsoApi } from "@/api/jucsoApi";
 import { DEMO_USERS } from "@/constants/mock-data";
-import type { Role, User } from "@/types";
-import { ROLES } from "@/types";
+import type { PortalType, User } from "@/types";
+import { PORTALS } from "@/types";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/FormFields";
 
-const PLACEHOLDERS: Record<Role, string> = {
+const PLACEHOLDERS: Record<PortalType, string> = {
   student: "e.g. JUC/2024/001",
-  minister: "e.g. MIN/ACAD/001",
-  executive: "e.g. EXEC/PRES/001",
-  admin: "e.g. ADMIN/001",
+  staff: "e.g. MIN/ACAD/001 or ADMIN/001",
 };
 
+const PORTAL_LABELS: Record<PortalType, string> = {
+  student: "Student Portal",
+  staff: "Staff Portal",
+};
+
+const STAFF_ROLES = new Set(["minister", "executive", "admin"]);
+
 interface LoginModalProps {
+  initialPortal?: PortalType;
   onLogin: (user: User) => void;
   onClose: () => void;
 }
 
-export function LoginModal({ onLogin, onClose }: LoginModalProps) {
-  const [role, setRole] = useState<Role>("student");
+export function LoginModal({ initialPortal = "student", onLogin, onClose }: LoginModalProps) {
+  const [portal, setPortal] = useState<PortalType>(initialPortal);
   const [reg, setReg] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -37,22 +43,27 @@ export function LoginModal({ onLogin, onClose }: LoginModalProps) {
 
     try {
       if (isApiEnabled) {
-        const user = await jucsoApi.login(reg.trim(), pw, role);
+        const user = await jucsoApi.login(reg.trim(), pw, portal);
         onLogin(user);
         return;
       }
 
       const user = DEMO_USERS[reg.trim()];
       if (!user) {
-        setErr(
-          "Registration number not found. Try: JUC/2024/001, MIN/ACAD/001, EXEC/PRES/001, or ADMIN/001",
-        );
+        setErr("Registration number not found. Check your details and try again.");
         return;
       }
-      if (user.role !== role) {
-        setErr(`This account is not a ${role} account. Select role: "${user.role}"`);
+
+      if (portal === "student" && user.role !== "student") {
+        setErr("This account uses the Staff Portal. Switch to Staff and sign in again.");
         return;
       }
+
+      if (portal === "staff" && !STAFF_ROLES.has(user.role)) {
+        setErr("This account uses the Student Portal. Switch to Student and sign in again.");
+        return;
+      }
+
       onLogin(user);
     } catch (error) {
       setErr(error instanceof ApiError ? error.message : "Login failed. Please try again.");
@@ -90,25 +101,28 @@ export function LoginModal({ onLogin, onClose }: LoginModalProps) {
             JU
           </div>
           <div id="login-title" className="font-display font-bold text-lg text-jucso-navy">
-            JUCSO Portal Login
+            {PORTAL_LABELS[portal]}
           </div>
           <div className="text-xs text-gray-400 mt-1">Sign in with your registration number</div>
         </div>
 
         <form onSubmit={onSubmit}>
           <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1" role="tablist">
-            {ROLES.map((r) => (
+            {PORTALS.map((p) => (
               <button
-                key={r}
+                key={p}
                 type="button"
                 role="tab"
-                aria-selected={role === r}
-                onClick={() => setRole(r)}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-md capitalize transition-all cursor-pointer ${
-                  role === r ? "bg-jucso-navy text-white" : "text-gray-500 hover:text-gray-700"
+                aria-selected={portal === p}
+                onClick={() => {
+                  setPortal(p);
+                  setErr("");
+                }}
+                className={`flex-1 py-2 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  portal === p ? "bg-jucso-navy text-white" : "text-gray-500 hover:text-gray-700"
                 }`}
               >
-                {r}
+                {PORTAL_LABELS[p]}
               </button>
             ))}
           </div>
@@ -117,7 +131,7 @@ export function LoginModal({ onLogin, onClose }: LoginModalProps) {
             label="Registration Number"
             value={reg}
             onChange={(e) => setReg(e.target.value)}
-            placeholder={PLACEHOLDERS[role]}
+            placeholder={PLACEHOLDERS[portal]}
             onKeyDown={onKeyDown}
             autoComplete="username"
           />
@@ -138,11 +152,16 @@ export function LoginModal({ onLogin, onClose }: LoginModalProps) {
           )}
 
           <div className="mt-1 mb-3 text-xs text-gray-400 bg-gray-50 rounded-lg p-3">
-            <strong className="text-gray-600">Demo accounts:</strong>
-            <br />
-            Student: JUC/2024/001 · Minister: MIN/ACAD/001
-            <br />
-            Executive: EXEC/PRES/001 · Admin: ADMIN/001
+            {portal === "student" ? (
+              <>
+                <strong className="text-gray-600">Student demo:</strong> JUC/2024/001
+              </>
+            ) : (
+              <>
+                <strong className="text-gray-600">Staff demo:</strong> MIN/ACAD/001 · EXEC/PRES/001 ·
+                ADMIN/001
+              </>
+            )}
             {isApiEnabled && (
               <>
                 <br />
