@@ -3,38 +3,48 @@ import { ApiError, isApiEnabled } from "@/api/client";
 import { jucsoApi } from "@/api/jucsoApi";
 import { DEMO_USERS } from "@/constants/mock-data";
 import type { PortalType, User } from "@/types";
-import { PORTALS } from "@/types";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/FormFields";
-
-const PLACEHOLDERS: Record<PortalType, string> = {
-  student: "e.g. JUC/2024/001",
-  staff: "e.g. MIN/ACAD/001 or ADMIN/001",
-};
 
 const PORTAL_LABELS: Record<PortalType, string> = {
   student: "Student Portal",
   staff: "Staff Portal",
 };
 
+const PORTAL_SUBTITLES: Record<PortalType, string> = {
+  student: "Sign in with your registration number",
+  staff: "Sign in with your PF number",
+};
+
+const ID_LABELS: Record<PortalType, string> = {
+  student: "Registration Number",
+  staff: "PF Number",
+};
+
+const PLACEHOLDERS: Record<PortalType, string> = {
+  student: "e.g. JUC/2024/001",
+  staff: "e.g. MIN/ACAD/001",
+};
+
 const STAFF_ROLES = new Set(["minister", "executive", "admin"]);
 
 interface LoginModalProps {
-  initialPortal?: PortalType;
+  portal: PortalType;
   onLogin: (user: User) => void;
   onClose: () => void;
 }
 
-export function LoginModal({ initialPortal = "student", onLogin, onClose }: LoginModalProps) {
-  const [portal, setPortal] = useState<PortalType>(initialPortal);
-  const [reg, setReg] = useState("");
+export function LoginModal({ portal, onLogin, onClose }: LoginModalProps) {
+  const [idNumber, setIdNumber] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const idLabel = ID_LABELS[portal];
+
   const login = async () => {
-    if (!reg.trim() || !pw.trim()) {
-      setErr("Please enter your registration number and password.");
+    if (!idNumber.trim() || !pw.trim()) {
+      setErr(`Please enter your ${idLabel.toLowerCase()} and password.`);
       return;
     }
 
@@ -43,24 +53,24 @@ export function LoginModal({ initialPortal = "student", onLogin, onClose }: Logi
 
     try {
       if (isApiEnabled) {
-        const user = await jucsoApi.login(reg.trim(), pw, portal);
+        const user = await jucsoApi.login(idNumber.trim(), pw, portal);
         onLogin(user);
         return;
       }
 
-      const user = DEMO_USERS[reg.trim()];
+      const user = DEMO_USERS[idNumber.trim()];
       if (!user) {
-        setErr("Registration number not found. Check your details and try again.");
+        setErr(`${idLabel} not found. Check your details and try again.`);
         return;
       }
 
       if (portal === "student" && user.role !== "student") {
-        setErr("This account uses the Staff Portal. Switch to Staff and sign in again.");
+        setErr("This account uses the Staff Portal.");
         return;
       }
 
       if (portal === "staff" && !STAFF_ROLES.has(user.role)) {
-        setErr("This account uses the Student Portal. Switch to Student and sign in again.");
+        setErr("This account uses the Student Portal.");
         return;
       }
 
@@ -103,34 +113,14 @@ export function LoginModal({ initialPortal = "student", onLogin, onClose }: Logi
           <div id="login-title" className="font-display font-bold text-lg text-jucso-navy">
             {PORTAL_LABELS[portal]}
           </div>
-          <div className="text-xs text-gray-400 mt-1">Sign in with your registration number</div>
+          <div className="text-xs text-gray-400 mt-1">{PORTAL_SUBTITLES[portal]}</div>
         </div>
 
         <form onSubmit={onSubmit}>
-          <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1" role="tablist">
-            {PORTALS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                role="tab"
-                aria-selected={portal === p}
-                onClick={() => {
-                  setPortal(p);
-                  setErr("");
-                }}
-                className={`flex-1 py-2 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                  portal === p ? "bg-jucso-navy text-white" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                {PORTAL_LABELS[p]}
-              </button>
-            ))}
-          </div>
-
           <Input
-            label="Registration Number"
-            value={reg}
-            onChange={(e) => setReg(e.target.value)}
+            label={idLabel}
+            value={idNumber}
+            onChange={(e) => setIdNumber(e.target.value)}
             placeholder={PLACEHOLDERS[portal]}
             onKeyDown={onKeyDown}
             autoComplete="username"
