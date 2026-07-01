@@ -5,7 +5,7 @@ export const PORTALS = ["student", "staff"] as const;
 export type PortalType = (typeof PORTALS)[number];
 
 export type ComplaintStatus = "Pending" | "In Progress" | "Resolved";
-export type SuggestionStatus = "Received" | "Under Review" | "Implemented";
+export type SuggestionStatus = "Received" | "Under Review" | "Implemented" | "Declined";
 export type NewsTag = "Announcement" | "Events" | "Clubs" | "Notice";
 
 export type PageId =
@@ -68,7 +68,11 @@ export interface Complaint {
   supportingDocumentUrl?: string;
   dueAt?: string;
   isOverdue?: boolean;
+  isEscalated?: boolean;
   activity?: ComplaintActivity[];
+  satisfactionRating?: number;
+  satisfactionComment?: string;
+  canRate?: boolean;
 }
 
 export interface Suggestion {
@@ -102,6 +106,28 @@ export interface Event {
   registered: number;
   description: string;
   isRegistered?: boolean;
+  isWaitlisted?: boolean;
+  waitlistPosition?: number | null;
+}
+
+export interface ElectionCandidate {
+  id: string;
+  name: string;
+  position?: string;
+  manifesto?: string;
+  voteCount?: number;
+}
+
+export interface Election {
+  id: string;
+  title: string;
+  description: string;
+  startsAt: string;
+  endsAt: string;
+  isOpen: boolean;
+  hasVoted: boolean;
+  votedCandidateId: string | null;
+  candidates: ElectionCandidate[];
 }
 
 export interface NewsItem {
@@ -110,6 +136,31 @@ export interface NewsItem {
   excerpt: string;
   date: string;
   tag: NewsTag;
+}
+
+export interface NewsDetail extends NewsItem {
+  body: string;
+}
+
+export type AnnouncementPriority = "info" | "warning" | "urgent";
+
+export interface PortalAnnouncement {
+  id: number;
+  message: string;
+  link_label?: string;
+  link_url?: string;
+  priority: AnnouncementPriority;
+  is_active?: boolean;
+}
+
+export interface PortalNotification {
+  id: number;
+  title: string;
+  message: string;
+  category: "complaint" | "suggestion" | "event" | "system";
+  link?: string;
+  is_read: boolean;
+  created_at: string;
 }
 
 export interface Document {

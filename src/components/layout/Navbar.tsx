@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { PORTAL_ROLE_LABELS, PUBLIC_PAGES } from "@/constants/mock-data";
+import { PUBLIC_PAGES } from "@/constants/mock-data";
 import { useApp } from "@/context/AppContext";
 import { useLanguage } from "@/context/LanguageContext";
+import { PORTAL_ROLE_KEYS, PUBLIC_PAGE_KEYS, type TranslationKey } from "@/i18n/translations";
 import type { PageId } from "@/types";
 import { Button } from "@/components/ui/Button";
+import { NotificationBell } from "@/components/layout/NotificationBell";
 
 function BrandMark() {
   return (
@@ -18,6 +20,7 @@ function BrandMark() {
 
 function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const { user } = useApp();
+  const { t } = useLanguage();
   if (!user) return null;
 
   return (
@@ -38,7 +41,7 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
         onClick={onSignOut}
         className="bg-white/10 border border-white/20 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-white/20 transition-all cursor-pointer"
       >
-        Sign Out
+        {t("signOut")}
       </button>
     </div>
   );
@@ -59,6 +62,8 @@ function PublicNavbar({
   onStudentPortal: () => void;
   onStaffPortal: () => void;
 }) {
+  const { t } = useLanguage();
+
   return (
     <>
       <div className="hidden md:flex items-center gap-0.5">
@@ -67,18 +72,18 @@ function PublicNavbar({
             key={p}
             type="button"
             onClick={() => navigate(p)}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold capitalize transition-all cursor-pointer ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
               page === p
                 ? "text-jucso-teal border-b-2 border-jucso-teal rounded-none"
                 : "text-white/60 hover:text-white"
             }`}
           >
-            {p}
+            {t(PUBLIC_PAGE_KEYS[p])}
           </button>
         ))}
         <div className="flex items-center gap-2 ml-3">
           <Button variant="gold" size="sm" onClick={onStudentPortal}>
-            Student Portal
+            {t("studentPortal")}
           </Button>
           <Button
             variant="outline"
@@ -86,7 +91,7 @@ function PublicNavbar({
             onClick={onStaffPortal}
             className="!text-white !border-white/30 hover:!bg-white/10"
           >
-            Staff Portal
+            {t("staffPortal")}
           </Button>
         </div>
       </div>
@@ -96,7 +101,7 @@ function PublicNavbar({
         className="md:hidden text-white text-xl cursor-pointer p-2"
         onClick={() => setMobileOpen(!mobileOpen)}
         aria-expanded={mobileOpen}
-        aria-label="Toggle menu"
+        aria-label={t("toggleMenu")}
       >
         {mobileOpen ? "✕" : "☰"}
       </button>
@@ -108,16 +113,16 @@ function PublicNavbar({
               key={p}
               type="button"
               onClick={() => navigate(p)}
-              className={`block w-full text-left py-2.5 text-sm font-semibold capitalize border-b border-white/5 cursor-pointer ${
+              className={`block w-full text-left py-2.5 text-sm font-semibold border-b border-white/5 cursor-pointer ${
                 page === p ? "text-jucso-teal" : "text-white/60"
               }`}
             >
-              {p}
+              {t(PUBLIC_PAGE_KEYS[p])}
             </button>
           ))}
           <div className="mt-3 flex flex-col gap-2">
             <Button variant="gold" size="sm" full onClick={onStudentPortal}>
-              Student Portal
+              {t("studentPortal")}
             </Button>
             <Button
               variant="outline"
@@ -126,7 +131,7 @@ function PublicNavbar({
               onClick={onStaffPortal}
               className="!text-white !border-white/30 hover:!bg-white/10"
             >
-              Staff Portal
+              {t("staffPortal")}
             </Button>
           </div>
         </div>
@@ -149,9 +154,10 @@ function PortalNavbar({
   onSignOut: () => void;
 }) {
   const { user } = useApp();
+  const { t } = useLanguage();
   if (!user) return null;
 
-  const portalLabel = PORTAL_ROLE_LABELS[user.role];
+  const portalLabel = t(PORTAL_ROLE_KEYS[user.role] as TranslationKey);
   const onDashboard = page === "dashboard";
 
   return (
@@ -166,9 +172,10 @@ function PortalNavbar({
             onClick={() => navigate("dashboard")}
             className="px-3 py-1.5 rounded-md text-xs font-semibold text-white/60 hover:text-white transition-all cursor-pointer"
           >
-            Dashboard
+            {t("dashboard")}
           </button>
         )}
+        <NotificationBell />
         <div className={`${onDashboard ? "" : "ml-2 pl-3 border-l border-white/10"}`}>
           <UserMenu onSignOut={onSignOut} />
         </div>
@@ -179,7 +186,7 @@ function PortalNavbar({
         className="md:hidden text-white text-xl cursor-pointer p-2"
         onClick={() => setMobileOpen(!mobileOpen)}
         aria-expanded={mobileOpen}
-        aria-label="Toggle menu"
+        aria-label={t("toggleMenu")}
       >
         {mobileOpen ? "✕" : "☰"}
       </button>
@@ -193,7 +200,7 @@ function PortalNavbar({
               onClick={() => navigate("dashboard")}
               className="block w-full text-left py-2.5 text-sm font-semibold border-b border-white/5 cursor-pointer text-white/60"
             >
-              Dashboard
+              {t("dashboard")}
             </button>
           )}
           <button
@@ -204,7 +211,7 @@ function PortalNavbar({
             }}
             className="mt-3 block w-full text-left text-sm text-white/50 cursor-pointer"
           >
-            Sign Out
+            {t("signOut")}
           </button>
         </div>
       )}
@@ -229,6 +236,7 @@ function LanguageToggle() {
 
 export function Navbar() {
   const { page, setPage, user, handleLoginClick, logout } = useApp();
+  const { t } = useLanguage();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const navigate = (target: PageId) => {
@@ -266,7 +274,7 @@ export function Navbar() {
               JUCSO
             </div>
             <div className="text-jucso-teal text-[9px] font-semibold tracking-wide uppercase">
-              {user ? PORTAL_ROLE_LABELS[user.role] : "Jordan University College"}
+              {user ? t(PORTAL_ROLE_KEYS[user.role] as TranslationKey) : t("collegeSubtitle")}
             </div>
           </div>
         </button>

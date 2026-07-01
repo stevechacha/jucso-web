@@ -1,11 +1,15 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useDashboardTab } from "@/hooks/useDashboardTab";
+import { useComplaintHighlight } from "@/hooks/useComplaintHighlight";
 import { jucsoApi, type ExecutiveStats } from "@/api/jucsoApi";
 import { useApp } from "@/context/AppContext";
+import type { Complaint, ComplaintStatus } from "@/types";
 import { exportComplaintsCsv } from "@/lib/exportComplaintsCsv";
 import { exportSuggestionsCsv } from "@/lib/exportSuggestionsCsv";
 import { Button } from "@/components/ui/Button";
 import { ConfidentialBadge } from "@/components/complaints/ConfidentialBadge";
+import { ComplaintReviewPanel } from "@/components/complaints/ComplaintReviewPanel";
+import { EscalatedBadge } from "@/components/complaints/EscalatedBadge";
 import { StatCard } from "@/components/ui/StatCard";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { DashboardShell } from "@/components/layout/DashboardShell";
@@ -17,25 +21,107 @@ import { EXECUTIVE_TABS, type TranslationKey } from "@/i18n/translations";
 const DEFAULT_TAB: TranslationKey = "tabExecutiveOverview";
 
 export function ExecutiveDashboard() {
-  const { user, complaints, suggestions, apiEnabled, refreshPortalData } = useApp();
-  if (!user) return null;
-
+  const { user, complaints, setComplaints, suggestions, apiEnabled, refreshPortalData } = useApp();
   const { t } = useLanguage();
   const [tab, setTab] = useDashboardTab(EXECUTIVE_TABS, DEFAULT_TAB);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [responseText, setResponseText] = useState("");
+  const [responding, setResponding] = useState(false);
   const [filterMin, setFilterMin] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
+  const [filterEscalated, setFilterEscalated] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [stats, setStats] = useState<ExecutiveStats | null>(null);
+  const [ministryOptions, setMinistryOptions] = useState<Array<{ id: number; name: string }>>([]);
+  const [forwardMinistry, setForwardMinistry] = useState("");
+  const [deEscalating, setDeEscalating] = useState(false);
+
+  const onHighlight = useCallback(
+    (complaintId: string, tabKey?: string) => {
+      setSelectedId(complaintId);
+      if (tabKey) setTab(tabKey as TranslationKey);
+      else if (complaints.find((c) => c.id === complaintId)?.isEscalated) setTab("tabExecutiveEscalated");
+      else setTab("tabExecutiveAllComplaints");
+    },
+    [complaints, setTab],
+  );
+
+  useComplaintHighlight(onHighlight);
 
   useEffect(() => {
     if (!apiEnabled) return;
     void jucsoApi.getExecutiveStats().then(setStats).catch(console.error);
   }, [apiEnabled, complaints]);
 
-  const ministries = [...new Set(complaints.map((c) => c.ministry))];
+  useEffect(() => {
+    if (!apiEnabled) return;
+    void jucsoApi.getMinistries().then(setMinistryOptions).catch(console.error);
+  }, [apiEnabled]);
+
+  const respond = async (id: string, status: ComplaintStatus) => {
+    setResponding(true);
+    try {
+      if (apiEnabled) {
+        await jucsoApi.updateComplaint(id, { status, response: responseText || undefined });
+        await refreshPortalData();
+      } else {
+        setComplaints((prev) =>
+          prev.map((c) => (c.id === id ? { ...c, status, response: responseText || c.response } : c)),
+        );
+      }
+      setResponseText("");
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setResponding(false);
+    }
+  };
+
+  const deEscalate = async (id: string) => {
+    if (!apiEnabled) return;
+    setDeEscalating(true);
+    try {
+      await jucsoApi.deEscalateComplaint(id, responseText || undefined);
+      await refreshPortalData();
+      setResponseText("");
+      setForwardMinistry("");
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setDeEscalating(false);
+    }
+  };
+
+  const forward = async (id: string) => {
+    if (!forwardMinistry) return;
+    setResponding(true);
+    try {
+      if (apiEnabled) {
+        await jucsoApi.updateComplaint(id, { ministry: forwardMinistry });
+        await refreshPortalData();
+      } else {
+        setComplaints((prev) =>
+          prev.map((c) =>
+            c.id === id ? { ...c, ministry: forwardMinistry, status: "Pending" as ComplaintStatus } : c,
+          ),
+        );
+      }
+      setForwardMinistry("");
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setResponding(false);
+    }
+  };
+
+  if (!user) return null;
+
+  const ministryNames = [...new Set(complaints.map((c) => c.ministry))];
   const filtered = complaints.filter((c) => {
     if (filterMin !== "All" && c.ministry !== filterMin) return false;
     if (filterStatus !== "All" && c.status !== filterStatus) return false;
+    if (filterEscalated === "Escalated" && !c.isEscalated) return false;
+    if (filterEscalated === "Not escalated" && c.isEscalated) return false;
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -48,7 +134,7 @@ export function ExecutiveDashboard() {
 
   const miniStats =
     stats?.ministry_stats ??
-    ministries.map((m) => {
+    ministryNames.map((m) => {
       const ministryComplaints = complaints.filter((c) => c.ministry === m);
       const resolved = ministryComplaints.filter((c) => c.status === "Resolved").length;
       return {
@@ -64,31 +150,163 @@ export function ExecutiveDashboard() {
     {
       icon: "📊",
       val: stats?.total_complaints ?? complaints.length,
-      lab: "Total Complaints",
+      lab: t("totalComplaints"),
       color: "#1B2B6B",
     },
     {
       icon: "⚠️",
       val: stats?.urgent ?? complaints.filter((c) => c.urgent).length,
-      lab: "Urgent",
+      lab: t("statUrgent"),
       color: "#EF4444",
     },
     {
       icon: "🔓",
       val: stats?.open_issues ?? complaints.filter((c) => c.status !== "Resolved").length,
-      lab: "Open Issues",
+      lab: t("statOpenIssues"),
       color: "#F59E0B",
+    },
+    {
+      icon: "⬆️",
+      val: stats?.escalated ?? complaints.filter((c) => c.isEscalated && c.status !== "Resolved").length,
+      lab: t("statEscalated"),
+      color: "#7C3AED",
     },
     {
       icon: "✅",
       val: stats?.resolved ?? complaints.filter((c) => c.status === "Resolved").length,
-      lab: "Resolved",
+      lab: t("resolved"),
       color: "#10B981",
     },
   ];
 
   const urgentIssues =
     stats?.urgent_issues ?? complaints.filter((c) => c.urgent && c.status !== "Resolved");
+
+  const escalatedIssues =
+    stats?.escalated_issues ?? complaints.filter((c) => c.isEscalated && c.status !== "Resolved");
+
+  const selected = complaints.find((c) => c.id === selectedId);
+
+  const renderComplaintWorkspace = (list: Complaint[], title: string, showFilters = true) => (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="md:col-span-2 bg-white rounded-xl shadow-card overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
+          <h2 className="font-display font-bold text-jucso-navy">{title}</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="outline" onClick={() => exportComplaintsCsv(list)}>
+              {t("exportCsv")}
+            </Button>
+            {showFilters && (
+              <>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search complaints…"
+                  className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
+                  aria-label="Search complaints"
+                />
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
+                  aria-label="Filter by status"
+                >
+                  <option value="All">{t("execAllStatuses")}</option>
+                  <option value="Pending">{t("statusPending")}</option>
+                  <option value="In Progress">{t("statusInProgress")}</option>
+                  <option value="Resolved">{t("statusResolved")}</option>
+                </select>
+                <select
+                  value={filterEscalated}
+                  onChange={(e) => setFilterEscalated(e.target.value)}
+                  className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
+                  aria-label="Filter by escalation"
+                >
+                  <option value="All">{t("execEscalationAll")}</option>
+                  <option value="Escalated">{t("execEscalationOnly")}</option>
+                  <option value="Not escalated">{t("execEscalationNone")}</option>
+                </select>
+                <select
+                  value={filterMin}
+                  onChange={(e) => setFilterMin(e.target.value)}
+                  className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
+                  aria-label="Filter by ministry"
+                >
+                  <option value="All">{t("execAllMinistries")}</option>
+                  {ministryNames.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-jucso-slate">
+                {["ID", "Student", "Category", "Ministry", "Status", "Date"].map((h) => (
+                  <th
+                    key={h}
+                    scope="col"
+                    className="px-4 py-2.5 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((c, i) => (
+                <tr
+                  key={c.id}
+                  onClick={() => {
+                    setSelectedId(c.id);
+                    setResponseText("");
+                  }}
+                  className={`border-t border-gray-50 cursor-pointer transition-colors ${
+                    selectedId === c.id ? "bg-cyan-50" : i % 2 === 1 ? "bg-gray-50/50" : ""
+                  } hover:bg-gray-50`}
+                >
+                  <td className="px-4 py-3 text-jucso-teal font-bold">
+                    <span className="inline-flex items-center gap-1 flex-wrap">
+                      {c.id}
+                      {c.urgent && <span className="text-red-500 ml-1">⚠</span>}
+                      {c.isEscalated && <EscalatedBadge />}
+                      {c.isConfidential && <ConfidentialBadge />}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{c.studentName}</td>
+                  <td className="px-4 py-3 text-gray-500 max-w-[120px] truncate">{c.category}</td>
+                  <td className="px-4 py-3 font-semibold text-jucso-navy whitespace-nowrap">{c.ministry}</td>
+                  <td className="px-4 py-3">
+                    <StatusPill status={c.status} />
+                  </td>
+                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{c.date}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <ComplaintReviewPanel
+        complaint={selected}
+        responseText={responseText}
+        onResponseChange={setResponseText}
+        onRespond={(status) => selected && void respond(selected.id, status)}
+        responding={responding}
+        ministries={ministryOptions}
+        forwardMinistry={forwardMinistry}
+        onForwardMinistryChange={setForwardMinistry}
+        onForward={() => selected && void forward(selected.id)}
+        onDeEscalate={() => selected && void deEscalate(selected.id)}
+        deEscalating={deEscalating}
+      />
+    </div>
+  );
 
   const rateColor = (rate: number) => (rate > 70 ? "#10B981" : rate > 40 ? "#F59E0B" : "#EF4444");
 
@@ -103,14 +321,14 @@ export function ExecutiveDashboard() {
     >
       {tab === "tabExecutiveOverview" && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
             {totalStats.map((s) => (
               <StatCard key={s.lab} icon={s.icon} value={s.val} label={s.lab} color={s.color} />
             ))}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="bg-white rounded-xl shadow-card p-5">
-              <h2 className="font-display font-bold text-jucso-navy mb-4">Ministry Resolution Rates</h2>
+              <h2 className="font-display font-bold text-jucso-navy mb-4">{t("execMinistryRates")}</h2>
               {miniStats.map((m) => (
                 <div key={m.name} className="mb-3">
                   <div className="flex justify-between text-xs mb-1">
@@ -129,9 +347,9 @@ export function ExecutiveDashboard() {
               ))}
             </div>
             <div className="bg-white rounded-xl shadow-card p-5">
-              <h2 className="font-display font-bold text-jucso-navy mb-4">Urgent Issues</h2>
+              <h2 className="font-display font-bold text-jucso-navy mb-4">{t("execUrgentIssues")}</h2>
               {urgentIssues.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-6">No urgent open issues 🎉</p>
+                <p className="text-gray-400 text-sm text-center py-6">{t("execNoUrgent")}</p>
               ) : (
                 urgentIssues.map((c) => (
                     <div key={c.id} className="flex items-start gap-3 mb-3 bg-red-50 rounded-lg p-3">
@@ -147,90 +365,32 @@ export function ExecutiveDashboard() {
               )}
             </div>
           </div>
+          <div className="bg-white rounded-xl shadow-card p-5 mt-5">
+            <h2 className="font-display font-bold text-jucso-navy mb-4">{t("execEscalatedTitle")}</h2>
+            {escalatedIssues.length === 0 ? (
+              <p className="text-gray-400 text-sm text-center py-6">{t("execNoEscalated")}</p>
+            ) : (
+              escalatedIssues.map((c) => (
+                <div key={c.id} className="flex items-start gap-3 mb-3 bg-violet-50 rounded-lg p-3">
+                  <EscalatedBadge />
+                  <div>
+                    <div className="font-bold text-violet-900 text-xs">
+                      {c.id} — {c.ministry}
+                    </div>
+                    <p className="text-violet-800 text-xs mt-0.5 leading-relaxed">{c.description}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </>
       )}
 
-      {tab === "tabExecutiveAllComplaints" && (
-        <div className="bg-white rounded-xl shadow-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
-            <h2 className="font-display font-bold text-jucso-navy">All Complaints ({filtered.length})</h2>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="outline" onClick={() => exportComplaintsCsv(filtered)}>
-                Export CSV
-              </Button>
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search complaints…"
-                className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
-                aria-label="Search complaints"
-              />
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
-                aria-label="Filter by status"
-              >
-                <option value="All">All statuses</option>
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Resolved">Resolved</option>
-              </select>
-              <select
-              value={filterMin}
-              onChange={(e) => setFilterMin(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-jucso-teal"
-              aria-label="Filter by ministry"
-            >
-              <option value="All">All Ministries</option>
-              {ministries.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-jucso-slate">
-                  {["ID", "Student", "Category", "Ministry", "Status", "Date"].map((h) => (
-                    <th
-                      key={h}
-                      scope="col"
-                      className="px-4 py-2.5 text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((c, i) => (
-                  <tr key={c.id} className={`border-t border-gray-50 ${i % 2 === 1 ? "bg-gray-50/50" : ""}`}>
-                    <td className="px-4 py-3 text-jucso-teal font-bold">
-                      <span className="inline-flex items-center gap-1 flex-wrap">
-                        {c.id}
-                        {c.urgent && <span className="text-red-500 ml-1">⚠</span>}
-                        {c.isConfidential && <ConfidentialBadge />}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{c.studentName}</td>
-                    <td className="px-4 py-3 text-gray-500 max-w-[120px] truncate">{c.category}</td>
-                    <td className="px-4 py-3 font-semibold text-jucso-navy whitespace-nowrap">{c.ministry}</td>
-                    <td className="px-4 py-3">
-                      <StatusPill status={c.status} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{c.date}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {tab === "tabExecutiveEscalated" &&
+        renderComplaintWorkspace(escalatedIssues, t("tabExecutiveEscalated"), false)}
+
+      {tab === "tabExecutiveAllComplaints" &&
+        renderComplaintWorkspace(filtered, t("execAllComplaints", { count: String(filtered.length) }))}
 
       {tab === "tabExecutiveSuggestions" && (
         <div className="space-y-4">

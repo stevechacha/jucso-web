@@ -34,7 +34,11 @@ export interface ApiComplaint {
   supporting_document_url?: string;
   due_at?: string;
   is_overdue?: boolean;
+  is_escalated?: boolean;
   activity?: ApiComplaintActivity[];
+  satisfaction_rating?: number | null;
+  satisfaction_comment?: string;
+  can_rate?: boolean;
 }
 
 export interface ApiSuggestion {
@@ -58,6 +62,38 @@ export interface ApiEvent {
   registered: number;
   description: string;
   is_registered?: boolean;
+  is_waitlisted?: boolean;
+  waitlist_position?: number | null;
+}
+
+export interface ApiElectionCandidate {
+  id: string;
+  name: string;
+  position?: string;
+  manifesto?: string;
+  vote_count?: number | null;
+}
+
+export interface ApiElection {
+  id: string;
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at: string;
+  is_open: boolean;
+  has_voted?: boolean;
+  voted_candidate_id?: string | null;
+  candidates?: ApiElectionCandidate[];
+}
+
+export interface ApiAuditLog {
+  id: number;
+  actor_name: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  detail: string;
+  timestamp: string;
 }
 
 export interface ApiDocument {
@@ -87,6 +123,7 @@ export interface ExecutiveStatsResponse {
   urgent: number;
   open_issues: number;
   resolved: number;
+  escalated?: number;
   ministry_stats: Array<{
     name: string;
     total: number;
@@ -95,6 +132,7 @@ export interface ExecutiveStatsResponse {
     rate: number;
   }>;
   urgent_issues: ApiComplaint[];
+  escalated_issues?: ApiComplaint[];
 }
 
 export interface AdminOverviewResponse {
@@ -145,6 +183,8 @@ export interface TransparencyStatsResponse {
   implemented_suggestions: number;
   pending_suggestions: number;
   suggestion_review_rate: number;
+  rated_complaints: number;
+  satisfaction_avg: number | null;
 }
 
 export interface PublicStatsResponse {
@@ -164,6 +204,17 @@ export interface MinisterWorkloadResponse {
   urgent_open: number;
   pending: number;
   in_progress: number;
+}
+
+export interface AttendeeListResponse {
+  name: string;
+  count: number;
+  attendees: Array<{
+    reg_number: string;
+    name: string;
+    email: string;
+    date: string;
+  }>;
 }
 
 export interface ComplaintCategoryOption {

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { useDashboardTab } from "@/hooks/useDashboardTab";
+import { useComplaintHighlight } from "@/hooks/useComplaintHighlight";
 import { exportComplaintsCsv } from "@/lib/exportComplaintsCsv";
 import { jucsoApi } from "@/api/jucsoApi";
 import { useApp } from "@/context/AppContext";
@@ -12,6 +13,7 @@ import { StatusPill } from "@/components/ui/StatusPill";
 import { ComplaintActivityTimeline } from "@/components/complaints/ComplaintActivityTimeline";
 import { ComplaintAttachmentLink } from "@/components/complaints/ComplaintAttachmentLink";
 import { ConfidentialBadge } from "@/components/complaints/ConfidentialBadge";
+import { EscalatedBadge } from "@/components/complaints/EscalatedBadge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { ProfilePanel } from "@/components/profile/ProfilePanel";
 import { SuggestionReviewPanel } from "@/components/suggestions/SuggestionReviewPanel";
@@ -22,8 +24,6 @@ const DEFAULT_TAB: TranslationKey = "tabMinisterIncoming";
 
 export function MinisterDashboard() {
   const { user, complaints, setComplaints, suggestions, apiEnabled, refreshPortalData } = useApp();
-  if (!user?.ministry) return null;
-
   const { t } = useLanguage();
   const [tab, setTab] = useDashboardTab(MINISTER_TABS, DEFAULT_TAB);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -33,6 +33,17 @@ export function MinisterDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [workload, setWorkload] = useState<MinisterWorkloadResponse | null>(null);
+  const [escalating, setEscalating] = useState(false);
+
+  const onHighlight = useCallback(
+    (complaintId: string, tabKey?: string) => {
+      setSelectedId(complaintId);
+      setTab(tabKey ? (tabKey as TranslationKey) : "tabMinisterIncoming");
+    },
+    [setTab],
+  );
+
+  useComplaintHighlight(onHighlight);
 
   useEffect(() => {
     if (!apiEnabled) return;
@@ -43,6 +54,8 @@ export function MinisterDashboard() {
     if (!apiEnabled || tab !== "tabMinisterOverview") return;
     void jucsoApi.getMinisterWorkload().then(setWorkload).catch(console.error);
   }, [apiEnabled, tab]);
+
+  if (!user?.ministry) return null;
 
   const myComplaints = complaints.filter((c) => c.ministry === user.ministry);
   const selected = complaints.find((c) => c.id === selectedId);
@@ -74,6 +87,19 @@ export function MinisterDashboard() {
     setSelectedId(null);
     setResponseText("");
     setForwardMinistry("");
+  };
+
+  const escalate = async (id: string) => {
+    if (!apiEnabled) return;
+    setEscalating(true);
+    try {
+      await jucsoApi.escalateComplaint(id);
+      await refreshPortalData();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setEscalating(false);
+    }
   };
 
   const stats = workload
@@ -222,6 +248,7 @@ export function MinisterDashboard() {
                   <h3 className="font-display font-bold text-jucso-navy text-sm">Complaint {selected.id}</h3>
                   <div className="flex items-center gap-2">
                     {selected.isConfidential && <ConfidentialBadge />}
+                    {selected.isEscalated && <EscalatedBadge />}
                     <StatusPill status={selected.status} />
                   </div>
                 </div>
@@ -264,6 +291,16 @@ export function MinisterDashboard() {
                   <Button size="sm" variant="navy" onClick={() => respond(selected.id, "Resolved")}>
                     Mark Resolved
                   </Button>
+                  {!selected.isEscalated && selected.status !== "Resolved" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={escalating}
+                      onClick={() => void escalate(selected.id)}
+                    >
+                      {escalating ? "Escalating…" : "Escalate to Executive"}
+                    </Button>
+                  )}
                 </div>
                 <div className="border-t border-gray-100 pt-4">
                   <Select

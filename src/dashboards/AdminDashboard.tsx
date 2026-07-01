@@ -2,10 +2,11 @@ import { generateStaffTempPassword } from "@/lib/generateTempPassword";
 import { downloadJsonBackup, getLastBackupLabel } from "@/lib/downloadJsonBackup";
 import { exportUsersCsv } from "@/lib/exportUsersCsv";
 import { exportComplaintsCsv } from "@/lib/exportComplaintsCsv";
+import { exportContactInboxCsv } from "@/lib/exportContactInboxCsv";
 import { useDashboardTab } from "@/hooks/useDashboardTab";
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@/api/client";
-import { jucsoApi, type AdminOverview, type AdminUserRow } from "@/api/jucsoApi";
+import { jucsoApi, type AdminOverview, type AdminUserRow, type ContactMessageRow, type PortalBackupRestoreSummary } from "@/api/jucsoApi";
 import type { AdminSystemStatusResponse } from "@/api/types";
 import { DEMO_USERS } from "@/constants/mock-data";
 import { useApp } from "@/context/AppContext";
@@ -15,6 +16,8 @@ import { Input, Select, Textarea } from "@/components/ui/FormFields";
 import { StatCard } from "@/components/ui/StatCard";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { SuggestionReviewPanel } from "@/components/suggestions/SuggestionReviewPanel";
+import { AdminElectionsPanel } from "@/components/elections/AdminElectionsPanel";
+import { AttendeeListPanel } from "@/components/admin/AttendeeListPanel";
 import { ProfilePanel } from "@/components/profile/ProfilePanel";
 import { ComplaintTable } from "@/components/complaints/ComplaintTable";
 import { useLanguage } from "@/context/LanguageContext";
@@ -345,6 +348,7 @@ function AddNewsForm({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [excerpt, setExcerpt] = useState("");
+  const [body, setBody] = useState("");
   const [tag, setTag] = useState("Announcement");
   const [err, setErr] = useState("");
   const [success, setSuccess] = useState("");
@@ -356,10 +360,11 @@ function AddNewsForm({ onCreated }: { onCreated: () => void }) {
     setErr("");
     setSuccess("");
     try {
-      await jucsoApi.createNews({ title: title.trim(), excerpt: excerpt.trim(), tag });
+      await jucsoApi.createNews({ title: title.trim(), excerpt: excerpt.trim(), body: body.trim(), tag });
       setSuccess(`Published “${title.trim()}”.`);
       setTitle("");
       setExcerpt("");
+      setBody("");
       setTag("Announcement");
       onCreated();
     } catch (error) {
@@ -382,7 +387,8 @@ function AddNewsForm({ onCreated }: { onCreated: () => void }) {
       <h3 className="font-display font-bold text-jucso-navy text-sm mb-3">New announcement</h3>
       <form onSubmit={(e) => void submit(e)}>
         <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} required />
-        <Textarea label="Summary" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} rows={3} required />
+        <Textarea label="Summary" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} rows={2} required />
+        <Textarea label="Full article (optional)" value={body} onChange={(e) => setBody(e.target.value)} rows={5} />
         <Select label="Category" value={tag} onChange={(e) => setTag(e.target.value)}>
           <option value="Announcement">Announcement</option>
           <option value="Events">Events</option>
@@ -415,6 +421,7 @@ function EditNewsForm({
 }) {
   const [title, setTitle] = useState(item.title);
   const [excerpt, setExcerpt] = useState(item.excerpt);
+  const [body, setBody] = useState("");
   const [tag, setTag] = useState(item.tag);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -427,6 +434,7 @@ function EditNewsForm({
       await jucsoApi.updateNews(item.id, {
         title: title.trim(),
         excerpt: excerpt.trim(),
+        ...(body.trim() ? { body: body.trim() } : {}),
         tag,
       });
       onSaved();
@@ -441,7 +449,14 @@ function EditNewsForm({
     <form onSubmit={(e) => void submit(e)} className="mt-3 border border-indigo-100 rounded-xl p-4 bg-indigo-50/40">
       <h4 className="font-display font-bold text-jucso-navy text-xs mb-3">Edit {item.id}</h4>
       <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} required />
-      <Textarea label="Summary" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} rows={3} required />
+      <Textarea label="Summary" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} rows={2} required />
+      <Textarea
+        label="Full article (optional)"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={5}
+        placeholder="Leave blank to keep existing full text"
+      />
       <Select label="Category" value={tag} onChange={(e) => setTag(e.target.value as NewsItem["tag"])}>
         <option value="Announcement">Announcement</option>
         <option value="Events">Events</option>
@@ -461,18 +476,101 @@ function EditNewsForm({
   );
 }
 
+function SiteAnnouncementPanel({ apiEnabled }: { apiEnabled: boolean }) {
+  const [items, setItems] = useState<import("@/types").PortalAnnouncement[]>([]);
+  const [message, setMessage] = useState("");
+  const [priority, setPriority] = useState<import("@/types").AnnouncementPriority>("info");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = () => {
+    if (!apiEnabled) return;
+    void jucsoApi.getAnnouncements().then(setItems).catch(console.error);
+  };
+
+  useEffect(() => {
+    load();
+  }, [apiEnabled]);
+
+  const publish = async () => {
+    if (!message.trim()) return;
+    setLoading(true);
+    setErr("");
+    try {
+      await jucsoApi.createAnnouncement({ message: message.trim(), priority });
+      setMessage("");
+      load();
+    } catch (error) {
+      setErr(error instanceof ApiError ? error.message : "Could not publish site banner.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deactivate = async (id: number) => {
+    await jucsoApi.deactivateAnnouncement(id);
+    load();
+  };
+
+  return (
+    <div className="bg-white rounded-xl p-5 shadow-card">
+      <h3 className="font-display font-bold text-jucso-navy text-sm mb-1">Site-wide banner</h3>
+      <p className="text-xs text-gray-500 mb-4">Urgent notices appear at the top of every public page.</p>
+      <Textarea label="Message" value={message} onChange={(e) => setMessage(e.target.value)} rows={2} />
+      <Select label="Priority" value={priority} onChange={(e) => setPriority(e.target.value as typeof priority)}>
+        <option value="info">Info</option>
+        <option value="warning">Warning</option>
+        <option value="urgent">Urgent</option>
+      </Select>
+      {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
+      <Button variant="navy" size="sm" disabled={!apiEnabled || loading || !message.trim()} onClick={() => void publish()}>
+        {loading ? "Publishing…" : "Publish banner"}
+      </Button>
+      {items.length > 0 && (
+        <ul className="mt-4 space-y-2 text-xs">
+          {items.map((item) => (
+            <li key={item.id} className="flex justify-between gap-3 border border-gray-100 rounded-lg p-3">
+              <div>
+                <span className="font-semibold capitalize text-jucso-navy">{item.priority}</span>
+                <p className="text-gray-600 mt-0.5">{item.message}</p>
+              </div>
+              {item.is_active !== false && (
+                <Button variant="outline" size="sm" onClick={() => void deactivate(item.id)}>
+                  Hide
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
   const { t } = useLanguage();
   const [lastBackup, setLastBackup] = useState<string | null>(() => getLastBackupLabel());
   const [backupLoading, setBackupLoading] = useState(false);
   const [backupMsg, setBackupMsg] = useState("");
+  const [restoreFile, setRestoreFile] = useState<Record<string, unknown> | null>(null);
+  const [restorePreview, setRestorePreview] = useState<PortalBackupRestoreSummary | null>(null);
+  const [restoreLoading, setRestoreLoading] = useState(false);
   const [systemStatus, setSystemStatus] = useState<AdminSystemStatusResponse | null>(null);
   const [activeTool, setActiveTool] = useState<(typeof SYSTEM_TOOLS)[number]["id"] | null>(null);
+  const [auditLogs, setAuditLogs] = useState<
+    Array<{ id: number; actor_name: string; action: string; target_type: string; target_id: string; detail: string; timestamp: string }>
+  >([]);
+  const [auditFilter, setAuditFilter] = useState("");
 
   useEffect(() => {
     if (!apiEnabled) return;
     void jucsoApi.getSystemStatus().then(setSystemStatus).catch(console.error);
   }, [apiEnabled]);
+
+  useEffect(() => {
+    if (!apiEnabled || activeTool !== "logs") return;
+    void jucsoApi.getAuditLogs(auditFilter || undefined).then(setAuditLogs).catch(console.error);
+  }, [apiEnabled, activeTool, auditFilter]);
 
   const runBackup = async () => {
     if (!apiEnabled) return;
@@ -487,6 +585,43 @@ function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
       setBackupMsg(error instanceof ApiError ? error.message : "Backup failed.");
     } finally {
       setBackupLoading(false);
+    }
+  };
+
+  const onRestoreFile = async (file: File | null) => {
+    if (!file) return;
+    setRestoreLoading(true);
+    setBackupMsg("");
+    setRestorePreview(null);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as Record<string, unknown>;
+      setRestoreFile(data);
+      const preview = await jucsoApi.previewPortalBackupRestore(data);
+      setRestorePreview(preview);
+      setBackupMsg("Restore preview ready. Confirm to apply content changes.");
+    } catch (error) {
+      setRestoreFile(null);
+      setRestorePreview(null);
+      setBackupMsg(error instanceof ApiError ? error.message : "Could not read backup file.");
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
+  const confirmRestore = async () => {
+    if (!restoreFile || !apiEnabled) return;
+    setRestoreLoading(true);
+    setBackupMsg("");
+    try {
+      const result = await jucsoApi.restorePortalBackup(restoreFile);
+      setRestorePreview(result);
+      setBackupMsg("Backup restored. Clubs, events, news, and document metadata were merged.");
+      setRestoreFile(null);
+    } catch (error) {
+      setBackupMsg(error instanceof ApiError ? error.message : "Restore failed.");
+    } finally {
+      setRestoreLoading(false);
     }
   };
 
@@ -511,7 +646,40 @@ function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
   };
 
   const renderDetail = () => {
-    if (!systemStatus || !activeTool || activeTool === "backup") return null;
+    if (!systemStatus || !activeTool || activeTool === "backup") {
+      if (activeTool !== "backup") return null;
+      return (
+        <div className="bg-white rounded-xl p-5 shadow-card text-xs space-y-3">
+          <h3 className="font-display font-bold text-jucso-navy">Restore from backup</h3>
+          <p className="text-gray-500">
+            Upload a JSON backup to merge clubs, events, news, and document metadata. Users, complaints, and
+            suggestions are not restored.
+          </p>
+          <input
+            type="file"
+            accept="application/json,.json"
+            disabled={!apiEnabled || restoreLoading}
+            onChange={(e) => void onRestoreFile(e.target.files?.[0] ?? null)}
+            className="block text-xs"
+          />
+          {restorePreview && (
+            <div className="bg-jucso-slate rounded-lg p-3 space-y-1">
+              <p>Clubs: {restorePreview.clubs.created} new, {restorePreview.clubs.updated} updated</p>
+              <p>Events: {restorePreview.events.created} new, {restorePreview.events.updated} updated</p>
+              <p>News: {restorePreview.news.created} new, {restorePreview.news.updated} updated</p>
+              <p>Documents: {restorePreview.documents.created} new, {restorePreview.documents.updated} updated</p>
+              {restorePreview.dry_run && restoreFile && (
+                <Button size="sm" variant="navy" className="mt-2" disabled={restoreLoading} onClick={() => void confirmRestore()}>
+                  {restoreLoading ? "Restoring…" : "Confirm restore"}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (!systemStatus) return null;
 
     if (activeTool === "security") {
       return (
@@ -529,21 +697,52 @@ function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
 
     if (activeTool === "logs") {
       return (
-        <div className="bg-white rounded-xl p-5 shadow-card text-xs">
-          <h3 className="font-display font-bold text-jucso-navy mb-3">{t("cronJobLogs")}</h3>
-          {systemStatus.cron_runs?.length ? (
-            <ul className="space-y-2">
-              {systemStatus.cron_runs.map((run) => (
-                <li key={`${run.job_name}-${run.ran_at}`} className="border-b border-gray-50 pb-2">
-                  <div className="font-semibold text-jucso-navy">{run.job_name}</div>
-                  <div className="text-gray-500">{new Date(run.ran_at).toLocaleString()}</div>
-                  <div className={run.success ? "text-emerald-700" : "text-red-600"}>{run.detail || (run.success ? "OK" : "Failed")}</div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-gray-400">No cron runs logged yet. Configure Railway cron with `railway.cron.toml`.</p>
-          )}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl p-5 shadow-card text-xs">
+            <h3 className="font-display font-bold text-jucso-navy mb-3">{t("cronJobLogs")}</h3>
+            {systemStatus.cron_runs?.length ? (
+              <ul className="space-y-2">
+                {systemStatus.cron_runs.map((run) => (
+                  <li key={`${run.job_name}-${run.ran_at}`} className="border-b border-gray-50 pb-2">
+                    <div className="font-semibold text-jucso-navy">{run.job_name}</div>
+                    <div className="text-gray-500">{new Date(run.ran_at).toLocaleString()}</div>
+                    <div className={run.success ? "text-emerald-700" : "text-red-600"}>
+                      {run.detail || (run.success ? "OK" : "Failed")}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-gray-400">No cron runs logged yet. Configure Railway cron with `railway.cron.toml`.</p>
+            )}
+          </div>
+          <div className="bg-white rounded-xl p-5 shadow-card text-xs">
+            <h3 className="font-display font-bold text-jucso-navy mb-3">{t("auditLogTitle")}</h3>
+            <input
+              type="search"
+              value={auditFilter}
+              onChange={(e) => setAuditFilter(e.target.value)}
+              placeholder={t("auditLogFilter")}
+              className="w-full mb-3 px-3 py-2 border border-gray-200 rounded-lg text-xs"
+            />
+            {auditLogs.length ? (
+              <ul className="space-y-2 max-h-64 overflow-y-auto">
+                {auditLogs.map((entry) => (
+                  <li key={entry.id} className="border-b border-gray-50 pb-2">
+                    <div className="font-semibold text-jucso-navy">{entry.action}</div>
+                    <div className="text-gray-500">
+                      {entry.actor_name}
+                      {entry.target_id ? ` · ${entry.target_type} ${entry.target_id}` : ""}
+                    </div>
+                    {entry.detail && <div className="text-gray-600">{entry.detail}</div>}
+                    <div className="text-gray-400">{entry.timestamp}</div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-gray-400">{t("auditLogEmpty")}</p>
+            )}
+          </div>
         </div>
       );
     }
@@ -562,6 +761,7 @@ function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
 
   return (
     <div className="space-y-4">
+      <SiteAnnouncementPanel apiEnabled={apiEnabled} />
       {backupMsg && <p className="text-xs text-jucso-navy bg-jucso-slate rounded-lg px-3 py-2">{backupMsg}</p>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {SYSTEM_TOOLS.map((s) => (
@@ -576,8 +776,12 @@ function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
               size="sm"
               disabled={!apiEnabled || (s.id === "backup" && backupLoading)}
               onClick={() => {
-                if (s.id === "backup") void runBackup();
-                else setActiveTool(activeTool === s.id ? null : s.id);
+                if (s.id === "backup") {
+                  setActiveTool("backup");
+                  void runBackup();
+                  return;
+                }
+                setActiveTool(activeTool === s.id ? null : s.id);
               }}
             >
               {s.id === "backup" && backupLoading ? "Exporting…" : t(s.actionKey)}
@@ -591,20 +795,15 @@ function SystemToolsPanel({ apiEnabled }: { apiEnabled: boolean }) {
 }
 
 function ContactInboxPanel() {
-  const [messages, setMessages] = useState<
-    Array<{
-      id: string;
-      name: string;
-      email: string;
-      subject: string;
-      message: string;
-      date: string;
-      is_read: boolean;
-    }>
-  >([]);
+  const { t } = useLanguage();
+  const [messages, setMessages] = useState<ContactMessageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [replyingId, setReplyingId] = useState<string | null>(null);
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [inboxFilter, setInboxFilter] = useState<"all" | "unread">("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkWorking, setBulkWorking] = useState(false);
 
   const load = () => {
     void jucsoApi
@@ -642,6 +841,79 @@ function ContactInboxPanel() {
     }
   };
 
+  const sendReply = async (id: string) => {
+    const reply = replyDrafts[id]?.trim();
+    if (!reply) return;
+    setReplyingId(id);
+    try {
+      const updated = await jucsoApi.replyContactMessage(id, reply);
+      setMessages((prev) => prev.map((m) => (m.id === id ? updated : m)));
+      setReplyDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setReplyingId(null);
+    }
+  };
+
+  const removeMessage = async (id: string) => {
+    if (!window.confirm("Delete this message permanently?")) return;
+    setUpdatingId(id);
+    try {
+      await jucsoApi.deleteContactMessage(id);
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const markAllRead = async () => {
+    setBulkWorking(true);
+    try {
+      await jucsoApi.markAllContactMessagesRead();
+      setMessages((prev) => prev.map((m) => ({ ...m, is_read: true })));
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setBulkWorking(false);
+    }
+  };
+
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.size} message(s) permanently?`)) return;
+    setBulkWorking(true);
+    try {
+      await jucsoApi.bulkDeleteContactMessages([...selectedIds]);
+      setMessages((prev) => prev.filter((m) => !selectedIds.has(m.id)));
+      setSelectedIds(new Set());
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setBulkWorking(false);
+    }
+  };
+
   const unread = messages.filter((m) => !m.is_read).length;
   const visible = inboxFilter === "unread" ? messages.filter((m) => !m.is_read) : messages;
 
@@ -649,31 +921,52 @@ function ContactInboxPanel() {
     <div className="bg-white rounded-xl shadow-card p-5">
       <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
         <h2 className="font-display font-bold text-jucso-navy">
-          Contact Inbox ({messages.length}
-          {unread > 0 ? ` · ${unread} unread` : ""})
+          {t("contactInbox")} ({messages.length}
+          {unread > 0 ? ` · ${unread} ${t("contactUnread").toLowerCase()}` : ""})
         </h2>
-        <div className="flex gap-1">
+        <div className="flex gap-1 flex-wrap">
+          {unread > 0 && (
+            <Button size="sm" variant="outline" disabled={bulkWorking} onClick={() => void markAllRead()}>
+              {t("contactMarkAllRead")}
+            </Button>
+          )}
+          {selectedIds.size > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={bulkWorking}
+              onClick={() => void bulkDelete()}
+              className="!text-red-600 !border-red-200"
+            >
+              {t("contactBulkDelete", { count: String(selectedIds.size) })}
+            </Button>
+          )}
+          {messages.length > 0 && (
+            <Button size="sm" variant="outline" onClick={() => exportContactInboxCsv(messages)}>
+              {t("contactExportCsv")}
+            </Button>
+          )}
           <Button
             size="sm"
             variant={inboxFilter === "all" ? "navy" : "outline"}
             onClick={() => setInboxFilter("all")}
           >
-            All
+            {t("contactAll")}
           </Button>
           <Button
             size="sm"
             variant={inboxFilter === "unread" ? "navy" : "outline"}
             onClick={() => setInboxFilter("unread")}
           >
-            Unread
+            {t("contactUnread")}
           </Button>
         </div>
       </div>
       {loading ? (
-        <p className="text-gray-400 text-sm">Loading messages…</p>
+        <p className="text-gray-400 text-sm">{t("loadingMessages")}</p>
       ) : visible.length === 0 ? (
         <p className="text-gray-400 text-sm">
-          {inboxFilter === "unread" ? "No unread messages." : "No contact messages yet."}
+          {inboxFilter === "unread" ? t("contactNoUnread") : t("contactNoMessages")}
         </p>
       ) : (
         <ul className="max-h-80 overflow-y-auto">
@@ -682,6 +975,15 @@ function ContactInboxPanel() {
               key={m.id}
               className={`py-3 border-b border-gray-50 last:border-0 ${m.is_read ? "opacity-70" : "bg-indigo-50/40 -mx-2 px-2 rounded-lg"}`}
             >
+              <div className="flex items-start gap-2 mb-1">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(m.id)}
+                  onChange={() => toggleSelected(m.id)}
+                  className="mt-1 rounded"
+                  aria-label={`Select message ${m.subject || m.id}`}
+                />
+                <div className="flex-1 min-w-0">
               <div className="flex justify-between gap-2 text-xs mb-1">
                 <span className="font-semibold text-jucso-navy">{m.subject || "(No subject)"}</span>
                 <span className="text-gray-400 whitespace-nowrap">{m.date}</span>
@@ -690,16 +992,55 @@ function ContactInboxPanel() {
                 {m.name} · {m.email}
               </div>
               <p className="text-xs text-gray-600 leading-relaxed mb-2">{m.message}</p>
-              <div className="flex gap-2">
+              {m.admin_reply && (
+                <div className="mb-2 rounded-lg bg-emerald-50 border border-emerald-100 p-2 text-xs">
+                  <div className="font-semibold text-emerald-800 mb-1">
+                    {m.replied_by_name ? t("contactRepliedBy", { name: m.replied_by_name }) : t("contactReply")}
+                  </div>
+                  <p className="text-emerald-900 whitespace-pre-wrap">{m.admin_reply}</p>
+                </div>
+              )}
+              {!m.admin_reply && (
+                <div className="mb-2">
+                  <Textarea
+                    label={t("contactReply")}
+                    value={replyDrafts[m.id] ?? ""}
+                    onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                    rows={3}
+                    placeholder={t("contactReplyPlaceholder")}
+                  />
+                  <Button
+                    size="sm"
+                    variant="teal"
+                    className="mt-2"
+                    disabled={replyingId === m.id || !(replyDrafts[m.id] ?? "").trim()}
+                    onClick={() => void sendReply(m.id)}
+                  >
+                    {replyingId === m.id ? t("contactSendingReply") : t("contactSendReply")}
+                  </Button>
+                </div>
+              )}
+              <div className="flex gap-2 flex-wrap">
                 {!m.is_read ? (
                   <Button size="sm" variant="outline" disabled={updatingId === m.id} onClick={() => void markRead(m.id)}>
-                    {updatingId === m.id ? "…" : "Mark as read"}
+                    {updatingId === m.id ? "…" : t("contactMarkRead")}
                   </Button>
                 ) : (
                   <Button size="sm" variant="outline" disabled={updatingId === m.id} onClick={() => void markUnread(m.id)}>
-                    {updatingId === m.id ? "…" : "Mark unread"}
+                    {updatingId === m.id ? "…" : t("contactMarkUnread")}
                   </Button>
                 )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={updatingId === m.id}
+                  onClick={() => void removeMessage(m.id)}
+                  className="!text-red-600 !border-red-200"
+                >
+                  {t("contactDelete")}
+                </Button>
+              </div>
+                </div>
               </div>
             </li>
           ))}
@@ -1055,6 +1396,8 @@ export function AdminDashboard() {
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
   const [editingClubId, setEditingClubId] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [viewingClubMembersId, setViewingClubMembersId] = useState<string | null>(null);
+  const [viewingEventRegistrantsId, setViewingEventRegistrantsId] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState("");
   const [userRoleFilter, setUserRoleFilter] = useState("all");
 
@@ -1444,6 +1787,7 @@ export function AdminDashboard() {
 
       {tab === "tabAdminContent" && (
         <div className="space-y-5">
+          <AdminElectionsPanel apiEnabled={apiEnabled} />
           <div className="bg-white rounded-xl shadow-card p-5">
             <h2 className="font-display font-bold text-jucso-navy mb-4">Review Suggestions</h2>
             <SuggestionReviewPanel
@@ -1578,11 +1922,24 @@ export function AdminDashboard() {
                         <div className="text-gray-400 text-[10px]">{c.category} · {c.members} members</div>
                       </div>
                       {apiEnabled && (
-                        <div className="flex gap-1 shrink-0">
+                        <div className="flex gap-1 shrink-0 flex-wrap justify-end">
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => setEditingClubId(editingClubId === c.id ? null : c.id)}
+                            onClick={() => {
+                              setViewingClubMembersId(viewingClubMembersId === c.id ? null : c.id);
+                              setEditingClubId(null);
+                            }}
+                          >
+                            {viewingClubMembersId === c.id ? "Hide" : "Members"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingClubId(editingClubId === c.id ? null : c.id);
+                              setViewingClubMembersId(null);
+                            }}
                           >
                             {editingClubId === c.id ? "Close" : "Edit"}
                           </Button>
@@ -1607,6 +1964,9 @@ export function AdminDashboard() {
                         }}
                       />
                     )}
+                    {viewingClubMembersId === c.id && (
+                      <AttendeeListPanel kind="club" itemId={c.id} itemName={c.name} />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -1623,11 +1983,24 @@ export function AdminDashboard() {
                         <div className="text-gray-400 text-[10px]">{e.date} · {e.location}</div>
                       </div>
                       {apiEnabled && (
-                        <div className="flex gap-1 shrink-0">
+                        <div className="flex gap-1 shrink-0 flex-wrap justify-end">
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => setEditingEventId(editingEventId === e.id ? null : e.id)}
+                            onClick={() => {
+                              setViewingEventRegistrantsId(viewingEventRegistrantsId === e.id ? null : e.id);
+                              setEditingEventId(null);
+                            }}
+                          >
+                            {viewingEventRegistrantsId === e.id ? "Hide" : "Attendees"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingEventId(editingEventId === e.id ? null : e.id);
+                              setViewingEventRegistrantsId(null);
+                            }}
                           >
                             {editingEventId === e.id ? "Close" : "Edit"}
                           </Button>
@@ -1651,6 +2024,9 @@ export function AdminDashboard() {
                           void refreshPortalData();
                         }}
                       />
+                    )}
+                    {viewingEventRegistrantsId === e.id && (
+                      <AttendeeListPanel kind="event" itemId={e.id} itemName={e.title} />
                     )}
                   </li>
                 ))}

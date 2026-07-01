@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { ApiError } from "@/api/client";
 import { useDashboardTab } from "@/hooks/useDashboardTab";
+import { useComplaintHighlight } from "@/hooks/useComplaintHighlight";
+import { useComplaintDraft } from "@/hooks/useComplaintDraft";
+import { useSuggestionDraft } from "@/hooks/useSuggestionDraft";
 import { useComplaintCategories } from "@/hooks/useComplaintCategories";
 import { jucsoApi } from "@/api/jucsoApi";
 import { useApp } from "@/context/AppContext";
@@ -13,6 +17,7 @@ import { ComplaintTable } from "@/components/complaints/ComplaintTable";
 import { TrackComplaintPanel } from "@/components/complaints/TrackComplaintPanel";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { EmailVerificationBanner } from "@/components/auth/EmailVerificationBanner";
+import { ElectionsPanel } from "@/components/elections/ElectionsPanel";
 import { ProfilePanel } from "@/components/profile/ProfilePanel";
 import { useLanguage } from "@/context/LanguageContext";
 import { STUDENT_TABS, type TranslationKey } from "@/i18n/translations";
@@ -27,95 +32,135 @@ export function StudentDashboard() {
   const { user, complaints, setComplaints, suggestions, setSuggestions, clubs, setClubs, events, setEvents, apiEnabled, refreshPortalData, setPage } =
     useApp();
   const categories = useComplaintCategories();
-
-  if (!user) return null;
-
   const { t } = useLanguage();
   const [tab, setTab] = useDashboardTab(STUDENT_TABS, DEFAULT_TAB);
-  const myComplaints = complaints.filter((c) => c.studentReg === user.reg);
-  const mySuggestions = suggestions.filter((s) => s.studentName === user.name);
-
-  const [newCat, setNewCat] = useState("");
-  const [newDesc, setNewDesc] = useState("");
-  const [newUrgent, setNewUrgent] = useState(false);
+  const { draft, setDraft, restored, savedAt, clearDraft, dismissRestored } = useComplaintDraft(user?.reg);
+  const {
+    draft: sugDraft,
+    setDraft: setSugDraft,
+    restored: sugRestored,
+    savedAt: sugSavedAt,
+    clearDraft: clearSugDraft,
+    dismissRestored: dismissSugRestored,
+  } = useSuggestionDraft(user?.reg);
   const [supportingFile, setSupportingFile] = useState<File | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [lastTrackingId, setLastTrackingId] = useState<string | null>(null);
+  const [complaintError, setComplaintError] = useState<string | null>(null);
+  const [complaintSubmitting, setComplaintSubmitting] = useState(false);
 
-  const [sugTitle, setSugTitle] = useState("");
-  const [sugDesc, setSugDesc] = useState("");
   const [sugSubmitted, setSugSubmitted] = useState(false);
   const [lastSuggestionId, setLastSuggestionId] = useState<string | null>(null);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [suggestionSubmitting, setSuggestionSubmitting] = useState(false);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  const onHighlight = useCallback(
+    (complaintId: string, tabKey?: string) => {
+      setTab(tabKey ? (tabKey as TranslationKey) : "tabStudentMyComplaints");
+      setHighlightId(complaintId);
+    },
+    [setTab],
+  );
+
+  useComplaintHighlight(onHighlight);
+
+  if (!user) return null;
+
+  const myComplaints = complaints.filter((c) => c.studentReg === user.reg);
+  const mySuggestions = suggestions.filter((s) => s.studentName === user.name);
 
   const submitComplaint = async () => {
-    if (!newCat || !newDesc.trim()) return;
-    if (apiEnabled) {
-      const complaint = await jucsoApi.createComplaint({
-        category: newCat,
-        description: newDesc,
-        urgent: newUrgent,
-        supportingDocument: supportingFile ?? undefined,
-      });
-      setLastTrackingId(complaint.id);
-      await refreshPortalData();
-    } else {
-      const c: Complaint = {
-        id: `JUC-${String(complaints.length + 1).padStart(3, "0")}`,
-        category: newCat,
-        description: newDesc,
-        ministry: categories[newCat] ?? "Academics",
-        status: "Pending",
-        date: formatDate(),
-        studentName: user.name,
-        studentReg: user.reg,
-        urgent: newUrgent,
-      };
-      setComplaints((prev) => [c, ...prev]);
-      setLastTrackingId(c.id);
+    if (!draft.category || !draft.description.trim()) return;
+    if (apiEnabled && user.emailVerified === false) {
+      setComplaintError(t("verifyEmailTitle"));
+      return;
     }
-    setSubmitted(true);
-    setTimeout(() => {
-      setSubmitted(false);
-      setLastTrackingId(null);
-      setNewCat("");
-      setNewDesc("");
-      setNewUrgent(false);
-      setSupportingFile(null);
-    }, 3000);
+
+    setComplaintError(null);
+    setComplaintSubmitting(true);
+    try {
+      if (apiEnabled) {
+        const complaint = await jucsoApi.createComplaint({
+          category: draft.category,
+          description: draft.description,
+          urgent: draft.urgent,
+          supportingDocument: supportingFile ?? undefined,
+        });
+        setLastTrackingId(complaint.id);
+        await refreshPortalData();
+      } else {
+        const c: Complaint = {
+          id: `JUC-${String(complaints.length + 1).padStart(3, "0")}`,
+          category: draft.category,
+          description: draft.description,
+          ministry: categories[draft.category] ?? "Academics",
+          status: "Pending",
+          date: formatDate(),
+          studentName: user!.name,
+          studentReg: user!.reg,
+          urgent: draft.urgent,
+        };
+        setComplaints((prev) => [c, ...prev]);
+        setLastTrackingId(c.id);
+      }
+      clearDraft();
+      setSubmitted(true);
+      setTimeout(() => {
+        setSubmitted(false);
+        setLastTrackingId(null);
+        setSupportingFile(null);
+      }, 3000);
+    } catch (error) {
+      setComplaintError(error instanceof ApiError ? error.message : t("complaintSubmitFailed"));
+    } finally {
+      setComplaintSubmitting(false);
+    }
   };
 
   const submitSuggestion = async () => {
-    if (!sugTitle.trim() || !sugDesc.trim()) return;
-    if (apiEnabled) {
-      const suggestion = await jucsoApi.createSuggestion({ title: sugTitle, description: sugDesc });
-      setLastSuggestionId(suggestion.id);
-      await refreshPortalData();
-    } else {
-      const s: Suggestion = {
-        id: `SUG-${String(suggestions.length + 1).padStart(3, "0")}`,
-        title: sugTitle,
-        description: sugDesc,
-        studentName: user.name,
-        date: formatDate(),
-        status: "Received",
-      };
-      setSuggestions((prev) => [s, ...prev]);
-      setLastSuggestionId(s.id);
+    if (!sugDraft.title.trim() || !sugDraft.description.trim()) return;
+
+    setSuggestionError(null);
+    setSuggestionSubmitting(true);
+    try {
+      if (apiEnabled) {
+        const suggestion = await jucsoApi.createSuggestion({
+          title: sugDraft.title,
+          description: sugDraft.description,
+        });
+        setLastSuggestionId(suggestion.id);
+        await refreshPortalData();
+      } else {
+        const s: Suggestion = {
+          id: `SUG-${String(suggestions.length + 1).padStart(3, "0")}`,
+          title: sugDraft.title,
+          description: sugDraft.description,
+          studentName: user!.name,
+          date: formatDate(),
+          status: "Received",
+        };
+        setSuggestions((prev) => [s, ...prev]);
+        setLastSuggestionId(s.id);
+      }
+      clearSugDraft();
+      setSugSubmitted(true);
+      setTimeout(() => {
+        setSugSubmitted(false);
+        setLastSuggestionId(null);
+      }, 4000);
+    } catch (error) {
+      setSuggestionError(error instanceof ApiError ? error.message : t("suggestionSubmitFailed"));
+    } finally {
+      setSuggestionSubmitting(false);
     }
-    setSugSubmitted(true);
-    setTimeout(() => {
-      setSugSubmitted(false);
-      setLastSuggestionId(null);
-      setSugTitle("");
-      setSugDesc("");
-    }, 4000);
   };
 
   const stats = [
-    { icon: "📋", val: myComplaints.length, lab: "Total Complaints", color: "#1B2B6B" },
-    { icon: "⏳", val: myComplaints.filter((c) => c.status === "Pending").length, lab: "Pending", color: "#6B7280" },
-    { icon: "🔄", val: myComplaints.filter((c) => c.status === "In Progress").length, lab: "In Progress", color: "#F59E0B" },
-    { icon: "✅", val: myComplaints.filter((c) => c.status === "Resolved").length, lab: "Resolved", color: "#10B981" },
+    { icon: "📋", val: myComplaints.length, lab: t("totalComplaints"), color: "#1B2B6B" },
+    { icon: "⏳", val: myComplaints.filter((c) => c.status === "Pending").length, lab: t("pending"), color: "#6B7280" },
+    { icon: "🔄", val: myComplaints.filter((c) => c.status === "In Progress").length, lab: t("inProgress"), color: "#F59E0B" },
+    { icon: "✅", val: myComplaints.filter((c) => c.status === "Resolved").length, lab: t("resolved"), color: "#10B981" },
   ];
 
   return (
@@ -149,12 +194,12 @@ export function StudentDashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <div className="lg:col-span-2 bg-white rounded-xl shadow-card overflow-hidden">
               <h2 className="px-5 py-4 border-b border-gray-100 font-display font-bold text-jucso-navy">
-                Recent Complaints
+                {t("recentComplaints")}
               </h2>
               <ComplaintTable complaints={myComplaints.slice(0, 3)} />
             </div>
             <div className="bg-white rounded-xl shadow-card p-5">
-              <TrackComplaintPanel regNumber={user.reg} title="Quick track" />
+              <TrackComplaintPanel regNumber={user.reg} title={t("quickTrack")} />
             </div>
           </div>
         </>
@@ -165,7 +210,13 @@ export function StudentDashboard() {
           <h2 className="px-5 py-4 border-b border-gray-100 font-display font-bold text-jucso-navy">
             My Complaints ({myComplaints.length})
           </h2>
-          <ComplaintTable complaints={myComplaints} showResponse />
+          <ComplaintTable
+            complaints={myComplaints}
+            showResponse
+            allowRating
+            highlightId={highlightId}
+            onRated={() => void refreshPortalData()}
+          />
         </div>
       )}
 
@@ -196,7 +247,22 @@ export function StudentDashboard() {
               </div>
             ) : (
               <>
-                <Select label="Complaint Category" value={newCat} onChange={(e) => setNewCat(e.target.value)}>
+                {restored && (
+                  <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+                    <span>{t("complaintDraftRestored")}</span>
+                    <button type="button" className="font-semibold underline shrink-0" onClick={dismissRestored}>
+                      {t("dismiss")}
+                    </button>
+                  </div>
+                )}
+                {savedAt && !restored && (
+                  <p className="text-[10px] text-gray-400 mb-3">{t("complaintDraftSaved")}</p>
+                )}
+                <Select
+                  label="Complaint Category"
+                  value={draft.category}
+                  onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+                >
                   <option value="">— Select a category —</option>
                   {Object.keys(categories).map((c) => (
                     <option key={c} value={c}>
@@ -204,23 +270,23 @@ export function StudentDashboard() {
                     </option>
                   ))}
                 </Select>
-                {newCat && (
+                {draft.category && (
                   <p className="text-xs text-indigo-600 bg-indigo-50 rounded p-2 mb-4">
-                    → Routed to: <strong>{categories[newCat]}</strong> Ministry
+                    → Routed to: <strong>{categories[draft.category]}</strong> Ministry
                   </p>
                 )}
                 <Textarea
                   label="Describe Your Complaint"
-                  value={newDesc}
-                  onChange={(e) => setNewDesc(e.target.value)}
+                  value={draft.description}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   rows={4}
                   placeholder="Describe the issue clearly..."
                 />
                 <label className="flex items-center gap-2 mb-4 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={newUrgent}
-                    onChange={(e) => setNewUrgent(e.target.checked)}
+                    checked={draft.urgent}
+                    onChange={(e) => setDraft({ ...draft, urgent: e.target.checked })}
                     className="rounded"
                   />
                   <span className="text-xs font-semibold text-red-600">Mark as urgent</span>
@@ -237,9 +303,19 @@ export function StudentDashboard() {
                   />
                   <span className="text-[10px] text-gray-400 mt-1 block">PDF, Word, or images — max 5 MB</span>
                 </label>
-                <Button full variant="navy" onClick={submitComplaint} disabled={!newCat || !newDesc.trim()}>
-                  Submit Complaint
+                <Button
+                  full
+                  variant="navy"
+                  onClick={() => void submitComplaint()}
+                  disabled={!draft.category || !draft.description.trim() || complaintSubmitting}
+                >
+                  {complaintSubmitting ? t("complaintSubmitting") : "Submit Complaint"}
                 </Button>
+                {complaintError ? (
+                  <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800" role="alert">
+                    {complaintError}
+                  </p>
+                ) : null}
               </>
             )}
           </div>
@@ -265,22 +341,43 @@ export function StudentDashboard() {
               </div>
             ) : (
               <>
+                {sugRestored && (
+                  <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+                    <span>{t("suggestionDraftRestored")}</span>
+                    <button type="button" className="font-semibold underline shrink-0" onClick={dismissSugRestored}>
+                      {t("dismiss")}
+                    </button>
+                  </div>
+                )}
+                {sugSavedAt && !sugRestored && (
+                  <p className="text-[10px] text-gray-400 mb-3">{t("suggestionDraftSaved")}</p>
+                )}
                 <Input
                   label="Suggestion Title"
-                  value={sugTitle}
-                  onChange={(e) => setSugTitle(e.target.value)}
+                  value={sugDraft.title}
+                  onChange={(e) => setSugDraft({ ...sugDraft, title: e.target.value })}
                   placeholder="Short, clear title"
                 />
                 <Textarea
                   label="Describe Your Idea"
-                  value={sugDesc}
-                  onChange={(e) => setSugDesc(e.target.value)}
+                  value={sugDraft.description}
+                  onChange={(e) => setSugDraft({ ...sugDraft, description: e.target.value })}
                   rows={4}
                   placeholder="Describe your suggestion in detail..."
                 />
-                <Button full variant="teal" onClick={submitSuggestion} disabled={!sugTitle.trim() || !sugDesc.trim()}>
-                  Submit Suggestion
+                <Button
+                  full
+                  variant="teal"
+                  onClick={() => void submitSuggestion()}
+                  disabled={!sugDraft.title.trim() || !sugDraft.description.trim() || suggestionSubmitting}
+                >
+                  {suggestionSubmitting ? t("suggestionSubmitting") : "Submit Suggestion"}
                 </Button>
+                {suggestionError ? (
+                  <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800" role="alert">
+                    {suggestionError}
+                  </p>
+                ) : null}
               </>
             )}
           </div>
@@ -303,6 +400,13 @@ export function StudentDashboard() {
                       <strong>Leadership response:</strong> {s.response}
                     </p>
                   )}
+                  {s.status !== "Implemented" && s.status !== "Declined" && s.isOverdue ? (
+                    <p className="text-xs font-semibold text-red-600 mt-2">
+                      {t("overdue")} — {t("slaDue", { date: s.dueAt ?? "" })}
+                    </p>
+                  ) : s.dueAt && s.status !== "Implemented" && s.status !== "Declined" ? (
+                    <p className="text-xs text-gray-500 mt-2">{t("slaDue", { date: s.dueAt })}</p>
+                  ) : null}
                   <time className="text-gray-400 text-xs mt-2 block">{s.date}</time>
                 </article>
               ))
@@ -352,11 +456,19 @@ export function StudentDashboard() {
           {events.map((e) => {
             const pct = Math.round((e.registered / e.capacity) * 100);
             const full = pct >= 100;
+            const onWaitlist = Boolean(e.isWaitlisted);
             return (
               <article key={e.id} className="bg-white rounded-xl p-5 shadow-card">
                 <div className="flex justify-between items-start mb-3 gap-2">
                   <h3 className="font-display font-bold text-jucso-navy text-sm">{e.title}</h3>
-                  {e.isRegistered && <Badge variant="green">Registered</Badge>}
+                  <div className="flex gap-1 flex-wrap justify-end">
+                    {e.isRegistered && <Badge variant="green">{t("eventRegistered")}</Badge>}
+                    {onWaitlist && (
+                      <Badge variant="navy">
+                        {t("eventWaitlist", { position: String(e.waitlistPosition ?? "?") })}
+                      </Badge>
+                    )}
+                  </div>
                 </div>
                 <p className="text-gray-500 text-xs leading-relaxed mb-3">{e.description}</p>
                 <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
@@ -375,10 +487,9 @@ export function StudentDashboard() {
                   </div>
                 </div>
                 <Button
-                  variant={e.isRegistered ? "white" : full ? "outline" : "navy"}
+                  variant={e.isRegistered || onWaitlist ? "white" : full ? "outline" : "navy"}
                   size="sm"
                   full
-                  disabled={full && !e.isRegistered}
                   onClick={async () => {
                     if (apiEnabled) {
                       const updated = await jucsoApi.toggleEventRegistration(e.id);
@@ -389,8 +500,15 @@ export function StudentDashboard() {
                           ev.id === e.id
                             ? {
                                 ...ev,
-                                isRegistered: !ev.isRegistered,
-                                registered: ev.isRegistered ? ev.registered - 1 : ev.registered + 1,
+                                isRegistered: !ev.isRegistered && !ev.isWaitlisted,
+                                isWaitlisted: full && !ev.isRegistered && !ev.isWaitlisted,
+                                waitlistPosition: full && !ev.isRegistered && !ev.isWaitlisted ? 1 : null,
+                                registered:
+                                  ev.isRegistered && !ev.isWaitlisted
+                                    ? ev.registered - 1
+                                    : !full && !ev.isRegistered && !ev.isWaitlisted
+                                      ? ev.registered + 1
+                                      : ev.registered,
                               }
                             : ev,
                         ),
@@ -398,13 +516,21 @@ export function StudentDashboard() {
                     }
                   }}
                 >
-                  {e.isRegistered ? "✓ Cancel Registration" : full ? "Full" : "Register Now"}
+                  {e.isRegistered
+                    ? t("eventCancelRegistration")
+                    : onWaitlist
+                      ? t("eventLeaveWaitlist")
+                      : full
+                        ? t("eventJoinWaitlist")
+                        : t("eventRegisterNow")}
                 </Button>
               </article>
             );
           })}
         </div>
       )}
+
+      {tab === "tabStudentElections" && <ElectionsPanel apiEnabled={apiEnabled} />}
 
       {tab === "tabStudentProfile" && <ProfilePanel />}
     </DashboardShell>

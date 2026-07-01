@@ -1,5 +1,6 @@
-import { apiRequest, clearAuthTokens, getToken, setRefreshToken, setToken, ApiError } from "@/api/client";
+import { apiRequest, clearAuthTokens, getToken, setRefreshToken, setToken, ApiError, apiBaseUrl } from "@/api/client";
 import { mapAdminUser, mapComplaint, mapEvent, mapSuggestion, mapUser } from "@/api/mappers";
+import { mapElection } from "@/api/electionMappers";
 import type {
   AdminOverviewResponse,
   ApiComplaint,
@@ -11,18 +12,47 @@ import type {
   LoginResponse,
   MinistryOption,
 } from "@/api/types";
-import type { Club, Complaint, NewsItem, PortalType } from "@/types";
+import type { Club, Complaint, NewsDetail, NewsItem, PortalAnnouncement, PortalNotification, PortalType } from "@/types";
 
 export interface ExecutiveStats {
   total_complaints: number;
   urgent: number;
   open_issues: number;
   resolved: number;
+  escalated: number;
   ministry_stats: ExecutiveStatsResponse["ministry_stats"];
   urgent_issues: Complaint[];
+  escalated_issues: Complaint[];
 }
 
 export type AdminOverview = AdminOverviewResponse;
+
+export interface ContactMessageRow {
+  id: string;
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+  date: string;
+  is_read: boolean;
+  admin_reply?: string;
+  replied_at?: string | null;
+  replied_by_name?: string;
+}
+
+export interface PortalBackupRestoreSummary {
+  dry_run: boolean;
+  clubs: { created: number; updated: number };
+  events: { created: number; updated: number };
+  news: { created: number; updated: number };
+  documents: { created: number; updated: number };
+  skipped: {
+    users: number;
+    complaints: number;
+    suggestions: number;
+    contact_messages: number;
+  };
+}
 export type { AdminUserRow } from "@/api/mappers";
 
 export const jucsoApi = {
@@ -184,6 +214,29 @@ export const jucsoApi = {
     return mapComplaint(complaint);
   },
 
+  async rateComplaint(id: string, data: { rating: number; comment?: string }) {
+    const complaint = await apiRequest<ApiComplaint>(`/api/complaints/${encodeURIComponent(id)}/rate/`, {
+      method: "POST",
+      body: data,
+    });
+    return mapComplaint(complaint);
+  },
+
+  async escalateComplaint(id: string) {
+    const complaint = await apiRequest<ApiComplaint>(`/api/complaints/${encodeURIComponent(id)}/escalate/`, {
+      method: "POST",
+    });
+    return mapComplaint(complaint);
+  },
+
+  async deEscalateComplaint(id: string, note?: string) {
+    const complaint = await apiRequest<ApiComplaint>(`/api/complaints/${encodeURIComponent(id)}/de-escalate/`, {
+      method: "POST",
+      body: note ? { note } : {},
+    });
+    return mapComplaint(complaint);
+  },
+
   async updateSuggestion(pk: number, data: { status: string; response?: string }) {
     const suggestion = await apiRequest<ApiSuggestion>(`/api/suggestions/${pk}/`, {
       method: "PATCH",
@@ -304,6 +357,61 @@ export const jucsoApi = {
     return apiRequest<NewsItem[]>(`/api/news/${query}`, { auth: false });
   },
 
+  getNewsDetail(newsId: string) {
+    return apiRequest<NewsDetail>(`/api/news/${encodeURIComponent(newsId)}/`, { auth: false });
+  },
+
+  getActiveAnnouncement() {
+    return apiRequest<PortalAnnouncement | null>("/api/announcement/", { auth: false });
+  },
+
+  getNotifications() {
+    return apiRequest<{ unread_count: number; results: PortalNotification[] }>("/api/notifications/");
+  },
+
+  markNotificationsRead(ids?: number[]) {
+    return apiRequest<{ marked: number; unread_count: number }>("/api/notifications/mark-read/", {
+      method: "POST",
+      body: ids ? { ids } : {},
+    });
+  },
+
+  eventsCalendarUrl() {
+    return `${apiBaseUrl}/api/events/calendar.ics`;
+  },
+
+  getAnnouncements() {
+    return apiRequest<PortalAnnouncement[]>("/api/admin/announcements/");
+  },
+
+  createAnnouncement(data: {
+    message: string;
+    link_label?: string;
+    link_url?: string;
+    priority?: PortalAnnouncement["priority"];
+    expires_at?: string;
+  }) {
+    return apiRequest<PortalAnnouncement>("/api/admin/announcements/", { method: "POST", body: data });
+  },
+
+  updateAnnouncement(
+    id: number,
+    data: Partial<{
+      message: string;
+      link_label: string;
+      link_url: string;
+      priority: PortalAnnouncement["priority"];
+      is_active: boolean;
+      expires_at: string | null;
+    }>,
+  ) {
+    return apiRequest<PortalAnnouncement>(`/api/admin/announcements/${id}/`, { method: "PATCH", body: data });
+  },
+
+  deactivateAnnouncement(id: number) {
+    return apiRequest<void>(`/api/admin/announcements/${id}/`, { method: "DELETE" });
+  },
+
   async getDocuments() {
     const docs = await apiRequest<ApiDocument[]>("/api/documents/", { auth: false });
     return docs.map((doc) => ({
@@ -324,7 +432,9 @@ export const jucsoApi = {
     const stats = await apiRequest<ExecutiveStatsResponse>("/api/stats/executive/");
     return {
       ...stats,
+      escalated: stats.escalated ?? 0,
       urgent_issues: stats.urgent_issues.map(mapComplaint),
+      escalated_issues: (stats.escalated_issues ?? []).map(mapComplaint),
     };
   },
 
@@ -357,7 +467,7 @@ export const jucsoApi = {
     };
   },
 
-  async createNews(data: { title: string; excerpt: string; tag: string; published_at?: string }) {
+  async createNews(data: { title: string; excerpt: string; body?: string; tag: string; published_at?: string }) {
     return apiRequest<NewsItem>("/api/admin/news/", { method: "POST", body: data });
   },
 
@@ -368,7 +478,7 @@ export const jucsoApi = {
 
   updateNews(
     newsId: string,
-    data: { title?: string; excerpt?: string; tag?: string; is_published?: boolean },
+    data: { title?: string; excerpt?: string; body?: string; tag?: string; is_published?: boolean },
   ) {
     const pk = parseInt(newsId.replace(/^N/i, ""), 10);
     return apiRequest<NewsItem>(`/api/admin/news/${pk}/`, { method: "PATCH", body: data });
@@ -377,6 +487,20 @@ export const jucsoApi = {
   async downloadPortalBackup() {
     const data = await apiRequest<Record<string, unknown>>("/api/admin/backup/", { method: "POST" });
     return data;
+  },
+
+  previewPortalBackupRestore(data: Record<string, unknown>) {
+    return apiRequest<PortalBackupRestoreSummary>("/api/admin/backup/restore/", {
+      method: "POST",
+      body: { data, confirm: false },
+    });
+  },
+
+  restorePortalBackup(data: Record<string, unknown>) {
+    return apiRequest<PortalBackupRestoreSummary>("/api/admin/backup/restore/", {
+      method: "POST",
+      body: { data, confirm: true },
+    });
   },
 
   deleteDocument(documentId: string) {
@@ -434,6 +558,31 @@ export const jucsoApi = {
     });
   },
 
+  replyContactMessage(messageId: string, reply: string) {
+    const pk = parseInt(messageId.replace(/^MSG-/i, ""), 10);
+    return apiRequest<ContactMessageRow>(`/api/admin/contact-messages/${pk}/reply/`, {
+      method: "POST",
+      body: { reply },
+    });
+  },
+
+  deleteContactMessage(messageId: string) {
+    const pk = parseInt(messageId.replace(/^MSG-/i, ""), 10);
+    return apiRequest<void>(`/api/admin/contact-messages/${pk}/`, { method: "DELETE" });
+  },
+
+  markAllContactMessagesRead() {
+    return apiRequest<{ updated: number }>("/api/admin/contact-messages/mark-all-read/", { method: "POST" });
+  },
+
+  bulkDeleteContactMessages(messageIds: string[]) {
+    const ids = messageIds.map((id) => parseInt(id.replace(/^MSG-/i, ""), 10));
+    return apiRequest<{ deleted: number }>("/api/admin/contact-messages/bulk-delete/", {
+      method: "POST",
+      body: { ids },
+    });
+  },
+
   async createClub(data: { name: string; description: string; leader: string; category: string }) {
     return apiRequest<Club>("/api/admin/clubs/", { method: "POST", body: data });
   },
@@ -484,5 +633,77 @@ export const jucsoApi = {
 
   getSystemStatus() {
     return apiRequest<import("@/api/types").AdminSystemStatusResponse>("/api/admin/system-status/");
+  },
+
+  getClubMembers(clubId: string) {
+    const pk = parseInt(clubId.replace(/^CLB-/i, ""), 10);
+    return apiRequest<import("@/api/types").AttendeeListResponse>(`/api/admin/clubs/${pk}/members/`);
+  },
+
+  getEventRegistrants(eventId: string) {
+    const pk = parseInt(eventId.replace(/^EVT-/i, ""), 10);
+    return apiRequest<import("@/api/types").AttendeeListResponse>(`/api/admin/events/${pk}/registrants/`);
+  },
+
+  async getElections() {
+    const res = await apiRequest<import("@/api/types").PaginatedResponse<import("@/api/types").ApiElection>>(
+      "/api/elections/",
+    );
+    return (res.results ?? []).map(mapElection);
+  },
+
+  async voteInElection(electionPk: number, candidateId: string) {
+    const election = await apiRequest<import("@/api/types").ApiElection>(`/api/elections/${electionPk}/vote/`, {
+      method: "POST",
+      body: { candidate_id: candidateId },
+    });
+    return mapElection(election);
+  },
+
+  async getAuditLogs(action?: string) {
+    const query = action ? `?action=${encodeURIComponent(action)}` : "";
+    const res = await apiRequest<import("@/api/types").PaginatedResponse<import("@/api/types").ApiAuditLog>>(
+      `/api/admin/audit-log/${query}`,
+    );
+    return res.results ?? [];
+  },
+
+  getPushPublicKey() {
+    return apiRequest<{ public_key: string }>("/api/push/vapid-public-key/");
+  },
+
+  subscribePush(subscription: PushSubscriptionJSON) {
+    return apiRequest<{ subscribed: boolean }>("/api/push/subscribe/", {
+      method: "POST",
+      body: subscription,
+    });
+  },
+
+  unsubscribePush(endpoint?: string) {
+    return apiRequest<{ unsubscribed: boolean }>("/api/push/subscribe/", {
+      method: "DELETE",
+      body: endpoint ? { endpoint } : {},
+    });
+  },
+
+  async getAdminElections() {
+    const res = await apiRequest<import("@/api/types").PaginatedResponse<import("@/api/types").ApiElection>>(
+      "/api/admin/elections/",
+    );
+    return (res.results ?? []).map(mapElection);
+  },
+
+  async createElection(payload: {
+    title: string;
+    description?: string;
+    starts_at: string;
+    ends_at: string;
+    candidates: Array<{ name: string; position?: string; manifesto?: string }>;
+  }) {
+    const election = await apiRequest<import("@/api/types").ApiElection>("/api/admin/elections/", {
+      method: "POST",
+      body: payload,
+    });
+    return mapElection(election);
   },
 };
